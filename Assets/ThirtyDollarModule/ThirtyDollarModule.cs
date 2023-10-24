@@ -105,7 +105,7 @@ public class ThirtyDollarModule : MonoBehaviour {
         };
 	}
 
-    // Gets information
+    // Gets information and scales the lights with bomb size
     private void Start() {
         InitSounds();
 
@@ -118,6 +118,10 @@ public class ThirtyDollarModule : MonoBehaviour {
             Debug.LogFormat("<Thirty Dollar Module #{0}> Keyboard starting at page {1}.", moduleId, keyboardPage);
             StartCoroutine(UpdateKeyboard());
         }
+
+        float scalar = transform.lossyScale.x;
+        for (var i = 0; i < Lights.Length; i++)
+            Lights[i].range *= scalar;
     }
 
     // Loads all the sounds into the module
@@ -556,5 +560,181 @@ public class ThirtyDollarModule : MonoBehaviour {
         Debug.LogFormat("[Thirty Dollar Module #{0}] Module solved!", moduleId);
         GetComponent<KMBombModule>().HandlePass();
         Audio.PlayGameSoundAtTransform(KMSoundOverride.SoundEffect.CorrectChime, gameObject.transform);
+    }
+
+    // Twitch Plays command handler - by eXish
+    #pragma warning disable 414
+    private readonly string TwitchHelpMessage = @"!{0} upper/lower <#> [Presses the specified upper/lower tile '#' in reading order] | !{0} left/right (#) [Presses the specified button at the bottom of the module (optionally '#' times)] | !{0} play [Presses the play button] | !{0} clear [Presses the clear button] | Commands are chainable with semicolons";
+    #pragma warning restore 414
+    IEnumerator ProcessTwitchCommand(string command)
+    {
+        string[] parameters = command.Split(';');
+        for (int i = 0; i < parameters.Length; i++)
+        {
+            if (parameters[i].EqualsIgnoreCase("play") || parameters[i].EqualsIgnoreCase("clear") || parameters[i].EqualsIgnoreCase("left") || parameters[i].EqualsIgnoreCase("right"))
+                continue;
+            string[] subparams = parameters[i].Split(' ');
+            if (subparams.Length == 2)
+            {
+                int val;
+                if (subparams[0].EqualsIgnoreCase("left") || subparams[0].EqualsIgnoreCase("right"))
+                {
+                    if (int.TryParse(subparams[1], out val) && val > 0)
+                        continue;
+                }
+                else if (subparams[0].EqualsIgnoreCase("upper"))
+                {
+                    if (int.TryParse(subparams[1], out val) && val > 0 && val < 6)
+                        continue;
+                }
+                else if (subparams[0].EqualsIgnoreCase("lower"))
+                {
+                    if (int.TryParse(subparams[1], out val) && val > 0 && val < 13)
+                        continue;
+                }
+            }
+            if (parameters.Length > 1)
+                yield return "sendtochaterror!f The specified subcommand '" + parameters[i] + "' is invalid!";
+            yield break;
+        }
+        yield return null;
+        for (int i = 0; i < parameters.Length; i++)
+        {
+            while (!canPress) yield return "trycancel";
+            string[] subparams = parameters[i].Split(' ');
+            if (parameters[i].EqualsIgnoreCase("left"))
+                ScrollButtons[0].OnInteract();
+            else if (parameters[i].EqualsIgnoreCase("right"))
+                ScrollButtons[1].OnInteract();
+            else if (parameters[i].EqualsIgnoreCase("play"))
+            {
+                SubmitButton.OnInteract();
+                bool strike = false;
+                for (int j = 0; j < submittedSounds.Length; j++)
+                {
+                    if (submittedSounds[j].GetId() != correctSounds[j])
+                    {
+                        strike = true;
+                        yield return "strike";
+                        break;
+                    }
+                }
+                if (!strike)
+                    yield return "solve";
+                break;
+            }
+            else if (parameters[i].EqualsIgnoreCase("clear"))
+                ClearButton.OnInteract();
+            else if (subparams[0].EqualsIgnoreCase("left"))
+            {
+                for (int j = 0; j < int.Parse(subparams[1]); j++)
+                {
+                    if (j > 0)
+                        while (!canPress) yield return "trycancel";
+                    ScrollButtons[0].OnInteract();
+                }
+            }
+            else if (subparams[0].EqualsIgnoreCase("right"))
+            {
+                for (int j = 0; j < int.Parse(subparams[1]); j++)
+                {
+                    if (j > 0)
+                        while (!canPress) yield return "trycancel";
+                    ScrollButtons[1].OnInteract();
+                }
+            }
+            else if (subparams[0].EqualsIgnoreCase("upper"))
+                DisplayPanels[int.Parse(subparams[1]) - 1].OnInteract();
+            else if (subparams[0].EqualsIgnoreCase("lower"))
+                KeyboardPanels[int.Parse(subparams[1]) - 1].OnInteract();
+        }
+    }
+
+    // Twitch Plays autosolver - by eXish
+    IEnumerator TwitchHandleForcedSolve()
+    {
+        if (moduleFailure)
+        {
+            SubmitButton.OnInteract();
+            yield return new WaitForSeconds(0.1f);
+        }
+        else
+        {
+            if (submitting)
+            {
+                for (int j = 0; j < submittedSounds.Length; j++)
+                {
+                    if (submittedSounds[j].GetId() != correctSounds[j])
+                    {
+                        StopAllCoroutines();
+                        moduleSolved = true;
+                        Module.HandlePass();
+                        yield break;
+                    }
+                }
+            }
+            else
+            {
+                int index = selectedPanel != -1 ? selectedPanel : 0;
+                for (int j = 0; j < submittedSounds.Length; j++)
+                {
+                    if (submittedSounds[index].GetId() != correctSounds[index])
+                    {
+                        if (selectedPanel != index)
+                        {
+                            while (!canPress) yield return true;
+                            DisplayPanels[index].OnInteract();
+                        }
+                        int targetPage = -1;
+                        for (int i = 0; i < 17; i++)
+                        {
+                            for (int k = 0; k < 12; k++)
+                            {
+                                if (correctSounds[index] == (i * 12 + k))
+                                {
+                                    targetPage = i;
+                                    i = 17;
+                                    k = 12;
+                                }
+                            }
+                        }
+                        int checker1 = keyboardPage;
+                        int checker2 = keyboardPage;
+                        while (checker1 != targetPage && checker2 != targetPage)
+                        {
+                            checker1 -= 1;
+                            if (checker1 < 0)
+                                checker1 += 17;
+                            checker2 += 1;
+                            if (checker2 > 16)
+                                checker2 -= 17;
+                        }
+                        if (checker1 == targetPage)
+                        {
+                            while (keyboardPage != targetPage)
+                            {
+                                while (!canPress) yield return true;
+                                ScrollButtons[0].OnInteract();
+                            }
+                        }
+                        else
+                        {
+                            while (keyboardPage != targetPage)
+                            {
+                                while (!canPress) yield return true;
+                                ScrollButtons[1].OnInteract();
+                            }
+                        }
+                        while (!canPress) yield return true;
+                        KeyboardPanels[correctSounds[index] % 12].OnInteract();
+                    }
+                    index++;
+                    index %= 5;
+                }
+                while (!canPress) yield return true;
+                SubmitButton.OnInteract();
+            }
+        }
+        while (!moduleSolved) yield return true;
     }
 }
